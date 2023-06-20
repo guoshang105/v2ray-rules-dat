@@ -1,0 +1,308 @@
+name: Build V2Ray rules dat files (Weekly Trigger)
+on:
+  schedule:
+    # At 00:00 on Sunday every week
+    - cron: "0 0 * * 0"
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go 1.x.y
+        uses: actions/setup-go@v3
+        with:
+          go-version: ^1.19
+
+      - name: Set variables
+        shell: bash
+        run: |
+          echo "CHINA_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/accelerated-domains.china.conf" >> $GITHUB_ENV
+          echo "GOOGLE_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/google.china.conf" >> $GITHUB_ENV
+          echo "APPLE_DOMAINS_URL=https://raw.githubusercontent.com/felixonmars/dnsmasq-china-list/master/apple.china.conf" >> $GITHUB_ENV
+          echo "CUSTOM_DIRECT=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/cn.txt" >> $GITHUB_ENV
+          echo "CUSTOM_PROXY=https://raw.githubusercontent.com/Loyalsoldier/domain-list-custom/release/geolocation-!cn.txt" >> $GITHUB_ENV
+          echo "WIN_SPY=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt" >> $GITHUB_ENV
+          echo "WIN_UPDATE=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/update.txt" >> $GITHUB_ENV
+          echo "WIN_EXTRA=https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/extra.txt" >> $GITHUB_ENV
+          # ads list
+          echo "PETERLOWE_REJECT_URL=https://pgl.yoyo.org/adservers/serverlist.php?hostformat=hosts&showintro=1&mimetype=plaintext" >> $GITHUB_ENV
+          echo "DANPOLLOCK_REJECT_URL=https://someonewhocares.org/hosts/hosts" >> $GITHUB_ENV
+          echo "ANTI_AD_REJECT_URL=https://raw.githubusercontent.com/privacy-protection-tools/anti-AD/master/anti-ad-domains.txt" >> $GITHUB_ENV
+          echo "ADGUARD_DNS_REJECT_URL=https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt" >> $GITHUB_ENV
+          echo "ADGK_REJECT_URL=https://ghproxy.com/https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/ADgk.txt" >> $GITHUB_ENV
+          echo "EASYLISTCHINA_EASYLIST_REJECT_URL=https://easylist-downloads.adblockplus.org/easylistchina+easylist.txt" >> $GITHUB_ENV
+          echo "BLUESKYXN_ALL_REJECT_URL=https://raw.githubusercontent.com/BlueSkyXN/AdGuardHomeRules/master/all.txt" >> $GITHUB_ENV
+          echo "XINGSF_ADS_REJECT_URL=https://github.com/xinggsf/Adblock-Plus-Rule/raw/master/rule.txt" >> $GITHUB_ENV
+          echo "XINGSF_VIDEOADS_REJECT_URL=https://github.com/xinggsf/Adblock-Plus-Rule/raw/master/rule.txt" >> $GITHUB_ENV
+          echo "UBLOCK_ORIGIN_PRIVACY_REJECT_URL=https://github.com/uBlockOrigin/uAssets/raw/master/filters/privacy.txt" >> $GITHUB_ENV
+          echo "UBLOCK_ORIGIN_FILTER_REJECT_URL=https://github.com/uBlockOrigin/uAssets/raw/master/filters/filters.txt" >> $GITHUB_ENV
+          echo "NEODEVPRO_ADS_REJECT_URL=https://raw.githubusercontent.com/neodevpro/neodevhost/master/adblocker" >> $GITHUB_ENV
+
+      - name: Checkout the "hidden" branch of this repo
+        uses: actions/checkout@v3
+        with:
+          ref: hidden
+
+      - name: Checkout Loyalsoldier/domain-list-custom
+        uses: actions/checkout@v3
+        with:
+          repository: Loyalsoldier/domain-list-custom
+          path: custom
+
+      - name: Checkout v2fly/domain-list-community
+        uses: actions/checkout@v3
+        with:
+          repository: v2fly/domain-list-community
+          path: community
+
+      - name: Checkout cokebar/gfwlist2dnsmasq
+        uses: actions/checkout@v3
+        with:
+          repository: cokebar/gfwlist2dnsmasq
+          path: gfwlist2dnsmasq
+
+      - name: Get geoip.dat relative files
+        run: |
+          wget https://github.com/Loyalsoldier/geoip/raw/release/geoip.dat
+          wget https://github.com/Loyalsoldier/geoip/raw/release/geoip.dat.sha256sum
+
+      - name: Generate GFWList domains
+        run: |
+          cd gfwlist2dnsmasq || exit 1
+          chmod +x ./gfwlist2dnsmasq.sh
+          ./gfwlist2dnsmasq.sh -l -o ./temp-gfwlist.txt
+
+      - name: Get and add direct domains into temp-direct.txt file
+        run: |
+          curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > temp-direct.txt
+          curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> temp-direct.txt
+
+      - name: Get and add proxy domains into temp-proxy.txt file
+        run: |
+          cat ./gfwlist2dnsmasq/temp-gfwlist.txt | perl -ne '/^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/ && print "$1\n"' > temp-proxy.txt
+          curl -sSL $GOOGLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> temp-proxy.txt
+          curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> temp-proxy.txt
+          curl -sSL ${CUSTOM_PROXY} | grep -Ev ":@cn" | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> temp-proxy.txt
+
+      - name: Get and add reject domains into temp-reject.txt file
+        run: |
+          curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "$1\n"' >> temp-reject.txt
+          curl -sSL $DANPOLLOCK_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})/ && print "$1\n"' | sed '1d' >> temp-reject.txt
+          curl -sSL $ANTI_AD_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' >> temp-reject.txt
+          curl -sSL $ADGK_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $BLUESKYXN_ALL_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $XINGSF_ADS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $XINGSF_VIDEOADS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $UBLOCK_ORIGIN_PRIVACY_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $UBLOCK_ORIGIN_FILTER_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+          curl -sSL $NEODEVPRO_ADS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' | perl -ne 'print if not /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/' > temp-reject.txt
+
+      - name: Reserve `full`, `regexp` and `keyword` type of rules from custom lists to "reserve" files
+        run: |
+          curl -sSL ${CUSTOM_DIRECT} | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > direct-reserve.txt
+          curl -sSL ${CUSTOM_PROXY} | grep -Ev ":@cn" | perl -ne '/^((full|regexp|keyword):[^:]+)(\n$|:@.+)/ && print "$1\n"' | sort --ignore-case -u > proxy-reserve.txt
+
+      - name: Add proxy, direct and reject domains from "hidden" branch to appropriate temp files
+        run: |
+          cat proxy.txt >> temp-proxy.txt
+          cat direct.txt >> temp-direct.txt
+          cat reject.txt >> temp-reject.txt
+
+      - name: Sort and generate redundant lists
+        run: |
+          cat temp-proxy.txt | sort --ignore-case -u > proxy-list-with-redundant
+          cat temp-direct.txt | sort --ignore-case -u > direct-list-with-redundant
+          cat temp-reject.txt | sort --ignore-case -u > reject-list-with-redundant
+
+      - name: Remove redundant domains
+        run: |
+          chmod +x findRedundantDomain.py
+          ./findRedundantDomain.py ./direct-list-with-redundant ./direct-list-deleted-unsort
+          ./findRedundantDomain.py ./proxy-list-with-redundant ./proxy-list-deleted-unsort
+          ./findRedundantDomain.py ./reject-list-with-redundant ./reject-list-deleted-unsort
+          [ ! -f "direct-list-deleted-unsort" ] && touch direct-list-deleted-unsort
+          [ ! -f "proxy-list-deleted-unsort" ] && touch proxy-list-deleted-unsort
+          [ ! -f "reject-list-deleted-unsort" ] && touch reject-list-deleted-unsort
+          sort ./direct-list-deleted-unsort > ./direct-list-deleted-sort
+          sort ./proxy-list-deleted-unsort > ./proxy-list-deleted-sort
+          sort ./reject-list-deleted-unsort > ./reject-list-deleted-sort
+          diff ./direct-list-deleted-sort ./direct-list-with-redundant | awk '/^>/{print $2}' > ./direct-list-without-redundant
+          diff ./proxy-list-deleted-sort ./proxy-list-with-redundant | awk '/^>/{print $2}' > ./proxy-list-without-redundant
+          diff ./reject-list-deleted-sort ./reject-list-with-redundant | awk '/^>/{print $2}' > ./reject-list-without-redundant
+
+      - name: Remove domains from "need-to-remove" lists in "hidden" branch
+        run: |
+          diff ./direct-need-to-remove.txt ./direct-list-without-redundant | awk '/^>/{print $2}' > temp-cn.txt
+          diff ./proxy-need-to-remove.txt ./proxy-list-without-redundant | awk '/^>/{print $2}' > temp-geolocation-\!cn.txt
+          diff ./reject-need-to-remove.txt ./reject-list-without-redundant | awk '/^>/{print $2}' > temp-category-ads-all.txt
+
+      - name: Remove domains end with ".cn" in "temp-geolocation-!cn.txt" and write lists to data directory
+        run: |
+          cat temp-cn.txt | sort --ignore-case -u | perl -ne '/^((?=^.{1,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})*)/ && print "$1\n"' > ./community/data/cn
+          cat temp-geolocation-\!cn.txt | sort --ignore-case -u | perl -ne '/^((?=^.{1,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})*)/ && print "$1\n"' | perl -ne 'print if not /\.cn$/' > ./community/data/geolocation-\!cn
+          cat temp-category-ads-all.txt | sort --ignore-case -u | perl -ne '/^((?=^.{1,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})*)/ && print "$1\n"' > ./community/data/category-ads-all
+
+      - name: Add `full`, `regexp` and `keyword` type of rules back into "cn", "geolocation-!cn" and "category-ads-all" list
+        run: |
+          [ -f "direct-reserve.txt" ] && cat direct-reserve.txt >> ./community/data/cn
+          [ -f "proxy-reserve.txt" ] && cat proxy-reserve.txt >> ./community/data/geolocation-\!cn
+          [ -f "reject-reserve.txt" ] && cat reject-reserve.txt >> ./community/data/category-ads-all
+          cp ./community/data/cn direct-list.txt
+          cp ./community/data/geolocation-\!cn proxy-list.txt
+          cp ./community/data/category-ads-all reject-list.txt
+
+      - name: Create google-cn, apple-cn, gfw, greatfire lists
+        run: |
+          curl -sSL $GOOGLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "full:$1\n"' > ./community/data/google-cn
+          curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "full:$1\n"' > ./community/data/apple-cn
+          cat ./gfwlist2dnsmasq/temp-gfwlist.txt | perl -ne '/^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/ && print "$1\n"' >> ./community/data/gfw
+          curl -sSL $WIN_SPY | grep "0.0.0.0" | awk '{print $2}' > ./community/data/win-spy
+          curl -sSL $WIN_UPDATE | grep "0.0.0.0" | awk '{print $2}' > ./community/data/win-update
+          curl -sSL $WIN_EXTRA | grep "0.0.0.0" | awk '{print $2}' > ./community/data/win-extra
+
+      - name: Build geosite.dat file
+        run: |
+          cd custom || exit 1
+          go run ./ --datapath=../community/data
+
+      - name: Move and zip files and generate sha256 hash
+        run: |
+          install -Dp ./geoip.dat ./publish/geoip.dat
+          install -Dp ./geoip.dat.sha256sum ./publish/geoip.dat.sha256sum
+          install -Dp ./custom/publish/geosite.dat ./publish/geosite.dat
+          install -p {proxy,direct,reject}-list.txt ./publish/
+          cd ./publish || exit 1
+          zip rules.zip {proxy,direct,reject}-list.txt geoip.dat geosite.dat
+          sha256sum geosite.dat > geosite.dat.sha256sum
+          sha256sum rules.zip > rules.zip.sha256sum
+
+      - name: Export artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: pre_flight_artifacts
+          path: publish
+
+  extract-artifact:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go 1.x.y
+        uses: actions/setup-go@v3
+        with:
+          go-version: ^1.19
+
+      - name: Checkout techprober/v2dat
+        uses: actions/checkout@v3
+        with:
+          repository: techprober/v2dat
+
+      - name: Build binary
+        run: |
+          go build -o v2dat
+          chmod u+x v2dat
+
+      - name: Copy pre-flight artifacts from previous job to local path
+        uses: actions/download-artifact@v3
+        with:
+          name: pre_flight_artifacts
+          path: publish
+
+      - name: Verify contents
+        shell: bash
+        run: |
+          pwd
+          echo "number of files: $(ls publish/ | wc -l)"
+
+      - name: Extract geoip.dat as *.txt artifacts
+        run: |
+          mkdir geoip
+          ./v2dat unpack geoip -o geoip publish/geoip.dat
+          zip -j geoip.zip geoip/*.txt
+
+      - name: Extract geosite.dat as *.txt artifacts
+        run: |
+          mkdir geosite
+          ./v2dat unpack geosite -o geosite publish/geosite.dat
+          cp publish/proxy-list.txt proxy.txt
+          cp publish/direct-list.txt direct.txt
+          cp publish/reject-list.txt reject.txt
+          zip -j geosite.zip geosite/*.txt {proxy,direct,reject}.txt
+
+      - name: Copy {proxy,direct,reject} lists
+        run: |
+          cp publish/{proxy,direct,reject}-list.txt .
+
+      - name: Verify contents
+        shell: bash
+        run: |
+          pwd
+          echo "number of files in geoip/: $(ls geoip/ | wc -l)"
+          echo "number of files in geosite/: $(ls geosite/ | wc -l)"
+
+      - name: Export artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: post_artifacts
+          path: |
+            geoip.zip
+            geosite.zip
+
+  publish:
+    needs: [build, extract-artifact]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set variables
+        shell: bash
+        run: |
+          echo "RELEASE_DATE=$(date +%Y-%m-%d-%H-%M)" >> $GITHUB_ENV
+
+      - name: Checkout the master branch of this repo
+        uses: actions/checkout@v3
+
+      - name: Copy artifacts from build job to local path
+        uses: actions/download-artifact@v3
+        with:
+          name: pre_flight_artifacts
+          path: publish/
+
+      - name: Copy artifacts from extract-artifact job to local path
+        uses: actions/download-artifact@v3
+        with:
+          name: post_artifacts
+
+      - name: Extract artifacts
+        shell: bash
+        run: |
+          unzip geoip.zip -d geoip/
+          unzip geosite.zip -d geosite/
+          mv geoip.zip geoip/ publish/
+          mv geosite.zip geosite/ publish/
+
+      - name: Release and upload assets
+        uses: softprops/action-gh-release@v0.1.15
+        with:
+          name: ${{ env.RELEASE_DATE }}
+          tag_name: ${{ env.RELEASE_DATE }}
+          draft: false
+          prerelease: false
+          body: "Release on ${{ env.RELEASE_DATE }}"
+          files: |
+            publish/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Git push assets to "release" branch
+        shell: bash
+        run: |
+          cd publish || exit 1
+          git init
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b release
+          git add .
+          git commit -m "${{ env.RELEASE_DATE }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin release
